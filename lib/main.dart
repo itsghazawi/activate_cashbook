@@ -1,6 +1,11 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -247,6 +252,41 @@ class _HomeScreenState extends State<HomeScreen> {
     History.load().then((h) => setState(() => _history = h));
   }
 
+  /// Save the customers log as a file (Files / iCloud Drive / WhatsApp…).
+  Future<void> _export() async {
+    if (_history.isEmpty) {
+      toast(context, 'السجل فارغ');
+      return;
+    }
+    final dir = await getTemporaryDirectory();
+    final n = DateTime.now();
+    final f = File('${dir.path}/activate-backup-${n.year}-${n.month}-${n.day}.json');
+    await f.writeAsString(jsonEncode({
+      'app': 'activate',
+      'exportedAt': n.toIso8601String(),
+      'history': _history.map((e) => e.toJson()).toList(),
+    }));
+    await SharePlus.instance.share(ShareParams(files: [XFile(f.path, mimeType: 'application/json')], title: 'نسخة سجل Activate'));
+  }
+
+  Future<void> _import() async {
+    final picked = await FilePicker.pickFile(dialogTitle: 'اختر ملف نسخة السجل');
+    if (picked == null) return;
+    try {
+      final j = jsonDecode(await picked.xFile.readAsString());
+      if (j is! Map || j['app'] != 'activate') throw 'bad';
+      final list = (j['history'] as List).map((e) => Activation.fromJson(Map<String, dynamic>.from(e))).toList();
+      // Merge: keep existing, add missing devices.
+      final have = _history.map((e) => e.device).toSet();
+      final added = list.where((e) => !have.contains(e.device)).toList();
+      setState(() => _history = [..._history, ...added]..sort((a, b) => b.at.compareTo(a.at)));
+      await History.save(_history);
+      if (mounted) toast(context, 'تم استيراد ${added.length} تفعيل');
+    } catch (_) {
+      if (mounted) toast(context, 'الملف غير صالح', error: true);
+    }
+  }
+
   Future<void> _paste() async {
     final d = await Clipboard.getData(Clipboard.kTextPlain);
     final t = d?.text ?? '';
@@ -334,6 +374,15 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: TextStyle(fontFamily: kHead, fontWeight: FontWeight.w800, fontSize: 22, color: p.gold)),
                   Text('تفعيل', style: TextStyle(color: p.dim, fontSize: 11)),
                 ]),
+                PopupMenuButton<String>(
+                  icon: Icon(Icons.more_vert_rounded, color: p.dim),
+                  color: p.bg2,
+                  onSelected: (v) => v == 'export' ? _export() : _import(),
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'export', child: Text('نسخ احتياطي للسجل (iCloud / الملفات)')),
+                    PopupMenuItem(value: 'import', child: Text('استيراد سجل من ملف')),
+                  ],
+                ),
               ]),
             ),
             Padding(
