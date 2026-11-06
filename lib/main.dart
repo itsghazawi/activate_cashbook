@@ -356,9 +356,12 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           Surface(
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Text('كود جهاز الزبون',
-                  style: TextStyle(fontFamily: kHead, fontWeight: FontWeight.w700, color: p.text, fontSize: 15)),
-              const SizedBox(height: 10),
+              TextField(
+                controller: _name,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(labelText: 'اسم الزبون', prefixIcon: Icon(Icons.person_outline_rounded)),
+              ),
+              const SizedBox(height: 12),
               TextField(
                 controller: _device,
                 textDirection: TextDirection.ltr,
@@ -366,29 +369,20 @@ class _HomeScreenState extends State<HomeScreen> {
                 textCapitalization: TextCapitalization.characters,
                 style: TextStyle(fontFamily: kHead, fontSize: 20, letterSpacing: 2, color: p.gold, fontWeight: FontWeight.w700),
                 decoration: InputDecoration(
+                  labelText: 'كود جهاز الزبون',
                   hintText: 'XXXX-XXXX-XXXX-XXXX',
                   errorText: _err,
                   suffixIcon: IconButton(icon: Icon(Icons.content_paste_rounded, color: p.gold), onPressed: _paste),
                 ),
               ),
               const SizedBox(height: 12),
-              Row(children: [
-                Expanded(
-                  child: TextField(
-                    controller: _name,
-                    decoration: const InputDecoration(labelText: 'اسم الزبون', prefixIcon: Icon(Icons.person_outline_rounded)),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: TextField(
-                    controller: _phone,
-                    keyboardType: TextInputType.phone,
-                    textDirection: TextDirection.ltr,
-                    decoration: const InputDecoration(labelText: 'رقمه', prefixIcon: Icon(Icons.phone_rounded)),
-                  ),
-                ),
-              ]),
+              TextField(
+                controller: _phone,
+                keyboardType: TextInputType.phone,
+                textDirection: TextDirection.ltr,
+                decoration: const InputDecoration(
+                    labelText: 'رقم الزبون (اختياري — للإرسال عبر واتساب)', prefixIcon: Icon(Icons.phone_rounded)),
+              ),
               const SizedBox(height: 16),
               GoldButton(label: 'توليد كود التفعيل', icon: Icons.key_rounded, loading: _busy, onPressed: _generate),
             ]),
