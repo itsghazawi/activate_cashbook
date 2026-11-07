@@ -1,22 +1,21 @@
-import 'dart:convert';
-import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'core/format.dart';
+import 'core/prefs.dart';
 import 'core/signer.dart';
+import 'settings_screen.dart';
 import 'ui/theme.dart';
 import 'ui/widgets.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  await Prefs.load();
   runApp(const ActivatorApp());
 }
 
@@ -24,10 +23,12 @@ class ActivatorApp extends StatelessWidget {
   const ActivatorApp({super.key});
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
+  Widget build(BuildContext context) => ValueListenableBuilder<ThemeMode>(
+        valueListenable: Prefs.theme,
+        builder: (_, mode, _) => MaterialApp(
         title: 'Activate',
         debugShowCheckedModeBanner: false,
-        themeMode: ThemeMode.dark,
+        themeMode: mode,
         theme: buildTheme(Pal.lightPal),
         darkTheme: buildTheme(Pal.darkPal),
         locale: const Locale('ar'),
@@ -38,12 +39,15 @@ class ActivatorApp extends StatelessWidget {
           GlobalCupertinoLocalizations.delegate,
         ],
         home: const PinScreen(),
+      ),
       );
 }
 
 // ------------------------------------------------------------------ PIN
 class PinScreen extends StatefulWidget {
-  const PinScreen({super.key});
+  /// Change mode: set a new PIN directly (no old PIN), then close.
+  final bool changeMode;
+  const PinScreen({super.key, this.changeMode = false});
   @override
   State<PinScreen> createState() => _PinScreenState();
 }
@@ -58,11 +62,25 @@ class _PinScreenState extends State<PinScreen> {
   @override
   void initState() {
     super.initState();
-    Pin.hash().then((h) => setState(() => _hasPin = h != null));
+    Pin.hash().then((h) {
+      if (!mounted) return;
+      setState(() => _hasPin = widget.changeMode ? false : h != null);
+      if (h != null && !widget.changeMode && Prefs.biometric.value) _bio();
+    });
+  }
+
+  bool get _bioKey => _hasPin == true && !widget.changeMode && Prefs.biometric.value;
+
+  Future<void> _bio() async {
+    if (await Bio.unlock() && mounted) _enter();
   }
 
   Future<void> _tap(String d) async {
     HapticFeedback.selectionClick();
+    if (d == 'B') {
+      _bio();
+      return;
+    }
     if (d == '<') {
       if (_entry.isNotEmpty) setState(() => _entry = _entry.substring(0, _entry.length - 1));
       return;
@@ -87,6 +105,10 @@ class _PinScreenState extends State<PinScreen> {
       });
     } else if (_first == _entry) {
       await Pin.set(_entry);
+      if (widget.changeMode) {
+        if (mounted) Navigator.pop(context, true);
+        return;
+      }
       _enter();
     } else {
       setState(() => _first = null);
@@ -115,7 +137,11 @@ class _PinScreenState extends State<PinScreen> {
   Widget build(BuildContext context) {
     final p = Pal.of(context);
     if (_hasPin == null) return const Scaffold();
-    final title = _hasPin! ? 'أدخل رمز الدخول' : (_first == null ? 'أنشئ رمز دخول من 4 أرقام' : 'أعد إدخال الرمز للتأكيد');
+    final title = _hasPin!
+        ? 'أدخل رمز الدخول'
+        : (_first == null
+            ? (widget.changeMode ? 'أدخل رمز الدخول الجديد' : 'أنشئ رمز دخول من 4 أرقام')
+            : 'أعد إدخال الرمز للتأكيد');
     Widget key(String d) => Expanded(
           child: Padding(
             padding: const EdgeInsets.all(8),
@@ -130,7 +156,9 @@ class _PinScreenState extends State<PinScreen> {
                         borderRadius: BorderRadius.circular(20),
                         onTap: () => _tap(d),
                         child: Center(
-                          child: d == '<'
+                          child: d == 'B'
+                              ? Icon(Icons.face_rounded, color: p.gold, size: 30)
+                              : d == '<'
                               ? Icon(Icons.backspace_outlined, color: p.dim)
                               : Text(d,
                                   style: TextStyle(
@@ -142,6 +170,7 @@ class _PinScreenState extends State<PinScreen> {
           ),
         );
     return Scaffold(
+      appBar: widget.changeMode ? AppBar(title: const Text('تغيير رمز الدخول')) : null,
       body: AppBackground(
         child: SafeArea(
           child: Padding(
@@ -194,7 +223,7 @@ class _PinScreenState extends State<PinScreen> {
                     ['1', '2', '3'],
                     ['4', '5', '6'],
                     ['7', '8', '9'],
-                    ['', '0', '<'],
+                    [_bioKey ? 'B' : '', '0', '<'],
                   ])
                     Row(children: row.map(key).toList()),
                 ]),
@@ -252,41 +281,6 @@ class _HomeScreenState extends State<HomeScreen> {
     History.load().then((h) => setState(() => _history = h));
   }
 
-  /// Save the customers log as a file (Files / iCloud Drive / WhatsApp…).
-  Future<void> _export() async {
-    if (_history.isEmpty) {
-      toast(context, 'السجل فارغ');
-      return;
-    }
-    final dir = await getTemporaryDirectory();
-    final n = DateTime.now();
-    final f = File('${dir.path}/activate-backup-${n.year}-${n.month}-${n.day}.json');
-    await f.writeAsString(jsonEncode({
-      'app': 'activate',
-      'exportedAt': n.toIso8601String(),
-      'history': _history.map((e) => e.toJson()).toList(),
-    }));
-    await SharePlus.instance.share(ShareParams(files: [XFile(f.path, mimeType: 'application/json')], title: 'نسخة سجل Activate'));
-  }
-
-  Future<void> _import() async {
-    final picked = await FilePicker.pickFile(dialogTitle: 'اختر ملف نسخة السجل');
-    if (picked == null) return;
-    try {
-      final j = jsonDecode(await picked.xFile.readAsString());
-      if (j is! Map || j['app'] != 'activate') throw 'bad';
-      final list = (j['history'] as List).map((e) => Activation.fromJson(Map<String, dynamic>.from(e))).toList();
-      // Merge: keep existing, add missing devices.
-      final have = _history.map((e) => e.device).toSet();
-      final added = list.where((e) => !have.contains(e.device)).toList();
-      setState(() => _history = [..._history, ...added]..sort((a, b) => b.at.compareTo(a.at)));
-      await History.save(_history);
-      if (mounted) toast(context, 'تم استيراد ${added.length} تفعيل');
-    } catch (_) {
-      if (mounted) toast(context, 'الملف غير صالح', error: true);
-    }
-  }
-
   Future<void> _paste() async {
     final d = await Clipboard.getData(Clipboard.kTextPlain);
     final t = d?.text ?? '';
@@ -329,8 +323,60 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  String _msgFor(Activation a) =>
-      'أهلاً${a.name.isEmpty ? '' : ' ${a.name}'} 👋\nشكراً لاختيارك تطبيق كاش بوك.\n\nكود التفعيل الخاص بجهازك:\n${a.code}\n\nانسخه والصقه في خانة «كود التفعيل» ثم اضغط «تفعيل التطبيق».\n— أيهم الغزاوي';
+  /// Only the code, so the customer can copy & paste it straight away.
+  String _msgFor(Activation a) => a.code;
+
+  Future<void> _edit(Activation a) async {
+    final name = TextEditingController(text: a.name);
+    final phone = TextEditingController(text: a.phone);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        title: const Text('تعديل بيانات الزبون'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: name,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'اسم الزبون', prefixIcon: Icon(Icons.person_outline_rounded)),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: phone,
+            keyboardType: TextInputType.phone,
+            textDirection: TextDirection.ltr,
+            decoration: const InputDecoration(labelText: 'رقم الزبون', prefixIcon: Icon(Icons.phone_rounded)),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d), child: const Text('إلغاء')),
+          TextButton(onPressed: () => Navigator.pop(d, true), child: const Text('حفظ')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() {
+      a.name = name.text.trim();
+      a.phone = phone.text.trim();
+    });
+    await History.save(_history);
+    if (mounted) toast(context, 'تم حفظ التعديل');
+  }
+
+  Future<void> _openSettings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SettingsScreen(
+          history: () => _history,
+          onHistory: (list) async {
+            setState(() => _history = list);
+            await History.save(list);
+          },
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
 
   String _wa(String phone) {
     var d = phone.replaceAll(RegExp(r'[^0-9+]'), '');
@@ -374,14 +420,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: TextStyle(fontFamily: kHead, fontWeight: FontWeight.w800, fontSize: 22, color: p.gold)),
                   Text('تفعيل', style: TextStyle(color: p.dim, fontSize: 11)),
                 ]),
-                PopupMenuButton<String>(
-                  icon: Icon(Icons.more_vert_rounded, color: p.dim),
-                  color: p.bg2,
-                  onSelected: (v) => v == 'export' ? _export() : _import(),
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'export', child: Text('نسخ احتياطي للسجل (iCloud / الملفات)')),
-                    PopupMenuItem(value: 'import', child: Text('استيراد سجل من ملف')),
-                  ],
+                const SizedBox(width: 6),
+                IconButton.filledTonal(
+                  onPressed: _openSettings,
+                  icon: const Icon(Icons.settings_rounded),
+                  style: IconButton.styleFrom(backgroundColor: p.gold.withValues(alpha: 0.15), foregroundColor: p.gold),
                 ),
               ]),
             ),
@@ -401,7 +444,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _generator(Pal p) => ListView(
-        padding: const EdgeInsets.fromLTRB(18, 16, 18, 30),
+        padding: EdgeInsets.fromLTRB(18, 16, 18, 30 + MediaQuery.of(context).viewPadding.bottom),
         children: [
           Surface(
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -466,7 +509,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: list.isEmpty
             ? const EmptyState(icon: Icons.history_rounded, title: 'لا يوجد تفعيلات', subtitle: 'كل كود تولّده يُحفظ هنا تلقائياً')
             : ListView.separated(
-                padding: const EdgeInsets.fromLTRB(18, 6, 18, 30),
+                padding: EdgeInsets.fromLTRB(18, 6, 18, 30 + MediaQuery.of(context).viewPadding.bottom),
                 itemCount: list.length,
                 separatorBuilder: (_, _) => const SizedBox(height: 10),
                 itemBuilder: (_, i) {
@@ -476,14 +519,21 @@ class _HomeScreenState extends State<HomeScreen> {
                     onTap: () => showModalBottomSheet(
                       context: context,
                       isScrollControlled: true,
-                      builder: (_) => Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
-                        child: SafeArea(
-                          child: Column(mainAxisSize: MainAxisSize.min, children: [
-                            SheetHeader(a.name.isEmpty ? 'تفعيل' : a.name, subtitle: fmtDateTime(a.at)),
-                            _ResultCard(a: a, onSend: _sendWhatsApp, msgFor: _msgFor),
-                          ]),
-                        ),
+                      builder: (c) => Padding(
+                        padding: EdgeInsets.fromLTRB(18, 0, 18, 24 + MediaQuery.of(c).viewPadding.bottom),
+                        child: Column(mainAxisSize: MainAxisSize.min, children: [
+                          SheetHeader(a.name.isEmpty ? 'تفعيل' : a.name, subtitle: fmtDateTime(a.at)),
+                          _ResultCard(a: a, onSend: _sendWhatsApp, msgFor: _msgFor),
+                          const SizedBox(height: 10),
+                          GhostButton(
+                            label: 'تعديل الاسم والرقم',
+                            icon: Icons.edit_rounded,
+                            onPressed: () {
+                              Navigator.pop(c);
+                              _edit(a);
+                            },
+                          ),
+                        ]),
                       ),
                     ),
                     onLongPress: () async {

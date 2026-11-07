@@ -29,8 +29,8 @@ class Signer {
 class Activation {
   final String device;
   final String code;
-  final String name;
-  final String phone;
+  String name;
+  String phone;
   final DateTime at;
   Activation({required this.device, required this.code, required this.name, required this.phone, required this.at});
 
