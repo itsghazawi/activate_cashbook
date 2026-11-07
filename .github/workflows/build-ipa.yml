@@ -37,8 +37,20 @@ jobs:
           path: Activate-unsigned.ipa
 
       - name: Publish as release
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: Activate (build ${{ github.run_number }})
           files: Activate-unsigned.ipa
+
+      - name: Push IPA to ipa-build branch
+        run: |
+          mkdir -p /tmp/out && cp Activate-unsigned.ipa /tmp/out/
+          cd /tmp/out
+          git init -q -b ipa-build
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add Activate-unsigned.ipa
+          git commit -qm "IPA build ${{ github.run_number }}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" ipa-build
