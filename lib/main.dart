@@ -65,7 +65,14 @@ class _PinScreenState extends State<PinScreen> {
     Pin.hash().then((h) {
       if (!mounted) return;
       setState(() => _hasPin = widget.changeMode ? false : h != null);
-      if (h != null && !widget.changeMode && Prefs.biometric.value) _bio();
+      // Show the PIN screen first, then raise Face ID on top of it.
+      if (h != null && !widget.changeMode && Prefs.biometric.value) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          Future.delayed(const Duration(milliseconds: 450), () {
+            if (mounted) _bio();
+          });
+        });
+      }
     });
   }
 
@@ -136,7 +143,7 @@ class _PinScreenState extends State<PinScreen> {
   @override
   Widget build(BuildContext context) {
     final p = Pal.of(context);
-    if (_hasPin == null) return const Scaffold();
+    if (_hasPin == null) return const Scaffold(body: AppBackground(child: SizedBox.expand()));
     final title = _hasPin!
         ? 'أدخل رمز الدخول'
         : (_first == null
